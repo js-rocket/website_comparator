@@ -1,0 +1,11 @@
+{
+  "name": "webchecker",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "pixelmatch": "^5.2.1",
+    "pngjs": "^6.0.0",
+    "puppeteer": "^12.0.1"
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+result/
+wc_config.json
+yarn.lock
