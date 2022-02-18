@@ -1,19 +1,21 @@
 /*
 Script to compare pages from two websites
 
-Example configuration file:
+Example configuration file wc_config.json:
 {
   "site_a" : "https://www1.example.com",
   "site_a_auth": "",
   "site_b" : "https://www2.example.com",
   "site_b_auth": "user:pass",
+  "screen_size": { "width": 1400, "height": 2304 },
   "masks": {
-    "one_ad": { "x1": 1180, "y1": 159, "x2": 1345, "y2": 760 },
-    "two_ad": { "x1": 1182, "y1": 282, "x2": 1347, "y2": 1503 }
+    "one_ad": { "x1": 1210, "y1": 159, "x2": 1380, "y2": 760 },
+    "two_ad": { "x1": 1210, "y1": 282, "x2": 1380, "y2": 1503 }
   },
   "pages": [
     { "url": "/", "mask": "two_ad" },
-    { "url": "/about", "mask": "one_ad" }
+    { "url": "/about", "mask": "one_ad" },
+    { "url": "/about/privacy", "mask": "one_ad" }
   ]
 }
 */
@@ -25,10 +27,10 @@ const { exec } = require("child_process");
 
 const print = console.log;
 
-const SETTINGS_FILE = 'wc_config.json';
+const SETTINGS_FILE_PREFIX = 'wc_config';
 const RESULT_FOLDER = 'result';
-const SCREEN_WIDTH = 1366;
-const SCREEN_HEIGHT = 3 * 768;
+
+var appSettings = {}
 
 const CSS_STYLE = `<style>
 .col1 img { width: 40vw }
@@ -52,8 +54,8 @@ const url2Filename = (url) => {
 // takes a snapshop of a webpage
 const snapSite = async (url, filename) => {
   const browser = await puppeteer.launch({
-    args: [`--window-size=${SCREEN_WIDTH},${SCREEN_HEIGHT}`],
-    defaultViewport: { width: SCREEN_WIDTH, height: SCREEN_HEIGHT }
+    args: [`--window-size=${appSettings.screen_size.width},${appSettings.screen_size.height}`],
+    defaultViewport: { width: appSettings.screen_size.width, height: appSettings.screen_size.height }
   });
 
   try {
@@ -62,7 +64,7 @@ const snapSite = async (url, filename) => {
       waitUntil: 'networkidle0',
       timeout: 45 * 1000, // in milliseconds
     });
-    await page.screenshot({ path: filename });
+    await page.screenshot({ path: filename, fullPage: true });
   } catch (e) {
     print(`Error taking page snapshot: `, e);
   }
@@ -82,14 +84,15 @@ const compareImages = (file1name, file2name) => {
 
   const { width, height } = img1;
   const diff = new PNG({ width, height });
-  const numDiffPixels = pixelmatch(img1.data, img2.data, diff.data, width, height); // { threshold: 0.1 })
+  const numDiffPixels = pixelmatch(img1.data, img2.data, diff.data, width, height,
+    { threshold: 0.15 }); // { threshold: 0.1 })
 
   return { pixelDiff: numDiffPixels, imageDiff: diff };
 }
 
 
-const readSettings = () => {
-  const content = fs.readFileSync(SETTINGS_FILE);
+const readSettings = (flavor) => {
+  const content = fs.readFileSync(`${SETTINGS_FILE_PREFIX}${flavor}.json`);
   var settings = {};
   try {
     settings = JSON.parse(content);
@@ -117,8 +120,8 @@ const sleep = (ms) => {
   });
 }
 
-const getSettings = async () => {
-  const settings = await readSettings();
+const getSettings = async (flavor) => {
+  const settings = await readSettings(flavor);
   if (!settings.site_a || !settings.site_b || !Array.isArray(settings.pages)) {
     exitMessage(-1, 'Settings file incorrect');
   };
@@ -128,28 +131,33 @@ const getSettings = async () => {
 
 
 const drawRect = (points, rect) => {
+  const pixelColor = 0xc0;
+  const pixelAlpha = 0xFF;
+
   for (var y = rect.y1; y < rect.y2; y++) {
     for (var x = rect.x1; x < rect.x2; x++) {
       var pixel = (points.width * y + x) << 2;
 
       // make pixel black
-      points.data[pixel] = 0;
-      points.data[pixel + 1] = 0;
-      points.data[pixel + 2] = 0;
+      points.data[pixel] = pixelColor;
+      points.data[pixel + 1] = pixelColor;
+      points.data[pixel + 2] = pixelColor;
 
       // set pixel opacity
-      points.data[pixel + 3] = 255;
+      points.data[pixel + 3] = pixelAlpha;
     }
   }
 }
 
 const pngAddRectangle = async (fileIn, rect) => {
+
   fs.createReadStream(fileIn)
     .pipe(new PNG({ filterType: 4 }))
     .on("parsed", function () {
       drawRect(this, rect);
       this.pack().pipe(fs.createWriteStream(fileIn));
     });
+
 }
 
 const snapPage = async (i, siteKey, settings) => {
@@ -169,29 +177,25 @@ const snapPage = async (i, siteKey, settings) => {
 }
 
 const snapshotBefore = async () => {
-  const settings = await getSettings();
-
-  for (var i = 0; i < settings.pages.length; i++) {
-    const fullfilePath = await snapPage(i, 'site_a', settings);
+  for (var i = 0; i < appSettings.pages.length; i++) {
+    const fullfilePath = await snapPage(i, 'site_a', appSettings);
 
     // if page has a mask defined, then draw mask over page
-    const page = settings.pages[i];
-    if (page.mask !== '' && settings.masks[page.mask]) {
-      pngAddRectangle(fullfilePath, settings.masks[page.mask]);
+    const page = appSettings.pages[i];
+    if (page.mask !== '' && appSettings.masks[page.mask]) {
+      pngAddRectangle(fullfilePath, appSettings.masks[page.mask]);
     };
   }
 }
 
 const snapshotAfter = async () => {
-  const settings = await getSettings();
-
-  for (var i = 0; i < settings.pages.length; i++) {
-    const fullfilePath = await snapPage(i, 'site_b', settings);
+  for (var i = 0; i < appSettings.pages.length; i++) {
+    const fullfilePath = await snapPage(i, 'site_b', appSettings);
 
     // if page has a mask defined, then draw mask over page
-    const page = settings.pages[i];
-    if (page.mask !== '' && settings.masks[page.mask]) {
-      pngAddRectangle(fullfilePath, settings.masks[page.mask]);
+    const page = appSettings.pages[i];
+    if (page.mask !== '' && appSettings.masks[page.mask]) {
+      pngAddRectangle(fullfilePath, appSettings.masks[page.mask]);
     };
   }
 }
@@ -224,7 +228,7 @@ const comparePages = (i, settings) => {
   // Compare the two image files
   const diffResult = compareImages(`${RESULT_FOLDER}/${file1}`, `${RESULT_FOLDER}/${file2}`);
   const compareResult = diffResult.pixelDiff;
-  const diffClass = compareResult < 10 ? 'row_same' : 'row_diff';
+  const diffClass = compareResult < 100 ? 'row_same' : 'row_diff';
 
   const diffFilename = `diff_${prefix}_${url2Filename(page.url)}.png`;
   if (compareResult > 0) {
@@ -246,20 +250,24 @@ const comparePages = (i, settings) => {
 }
 
 const snapshotCompare = async () => {
-  const settings = await getSettings();
-
-  writeCompareHeader(settings);
-  for (var i = 0; i < settings.pages.length; i++) {
-    comparePages(i, settings);
+  writeCompareHeader(appSettings);
+  for (var i = 0; i < appSettings.pages.length; i++) {
+    comparePages(i, appSettings);
   }
   writeCompareFooter();
 }
 
 
 const main = async () => {
-  if (process.argv.length !== 3) exitMessage(-1, 'Invalid number of arguments');
+  if (process.argv.length < 3) exitMessage(-1, 'Invalid number of arguments');
 
   const option = process.argv[2];
+  let flavor = process.argv[3];
+  if (!flavor || typeof (flavor) !== 'string') flavor = '';
+
+  print('FLAVOR: ' + flavor);
+
+  appSettings = await getSettings(flavor);
 
   if (option === 'snap-before' || option === 'snap-after') {
     exec(`mkdir ${RESULT_FOLDER}`);
@@ -272,6 +280,11 @@ const main = async () => {
     case 'snap-after':
       return await snapshotAfter();
     case 'compare':
+      return await snapshotCompare();
+    case 'snap-compare':
+      await snapshotBefore();
+      await snapshotAfter();
+      await sleep(2500);
       return await snapshotCompare();
   }
 }
